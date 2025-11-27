@@ -31,7 +31,7 @@
         </Lifecycle>
         <UI>
           <Type>Panel</Type>
-          <Menu>Amin Lightning Edit</Menu>
+          <Menu>⚡Lightning Edit</Menu>
           <Geometry>
             <Size>
               <Height>300</Height>
