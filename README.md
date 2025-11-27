@@ -32,5 +32,5 @@ Since we don't have an automated installer for Mac yet, follow these 3 steps:
 
 ```bash
 defaults write com.adobe.CSXS.10 PlayerDebugMode 1; defaults write com.adobe.CSXS.11 PlayerDebugMode 1; defaults write com.adobe.CSXS.12 PlayerDebugMode 1; defaults write com.adobe.CSXS.13 PlayerDebugMode 1; defaults write com.adobe.CSXS.14 PlayerDebugMode 1; defaults write com.adobe.CSXS.15 PlayerDebugMode 1; defaults write com.adobe.CSXS.16 PlayerDebugMode 1
-
+```
 3. **Restart Premiere Pro.** The extension will be under **Window > Extensions**.
