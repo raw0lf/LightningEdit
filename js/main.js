@@ -19,6 +19,10 @@
         document.getElementById("loopifyButton").addEventListener("click", function () {
             csInterface.evalScript("loopify()");
         });
+
+        document.getElementById("lilShakeButton").addEventListener("click", function () {
+            csInterface.evalScript("lilShake()");
+        });
     }
 
     init();

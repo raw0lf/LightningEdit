@@ -416,20 +416,103 @@ function universalUndo() {
             if (!sequence) return;
 
             var historyItem = historyStack.pop();
-            var trackIndex = historyItem.trackIndex;
-            var state = historyItem.state;
 
-            if (trackIndex >= 0 && trackIndex < sequence.videoTracks.numTracks) {
-                var videoTrack = sequence.videoTracks[trackIndex];
-                restoreTrackState(videoTrack, state);
+            if (historyItem.type === "removeEffect") {
+                // Smart Undo: Remove specific effect via QE Component Probe
+                var trackIndex = historyItem.trackIndex;
+                var clipStartTimes = historyItem.clipStartTimes;
+                var effectNamePart = historyItem.effectName;
+
+                app.enableQE();
+                var activeSeq = qe.project.getActiveSequence();
+                if (!activeSeq) { alert("Undo Error: QE Sequence not found."); return; }
+                var qeTrack = activeSeq.getVideoTrackAt(trackIndex);
+
+                if (qeTrack) {
+                    for (var i = 0; i < clipStartTimes.length; i++) {
+                        var startTime = clipStartTimes[i];
+
+                        // Find QE Clip
+                        var qeClip = null;
+                        for (var q = 0; q < qeTrack.numItems; q++) {
+                            var item = qeTrack.getItemAt(q);
+                            var itemStartSeconds = 0;
+                            if (typeof item.start === 'string') {
+                                var timeObj = new Time();
+                                timeObj.ticks = item.start;
+                                itemStartSeconds = timeObj.seconds;
+                            } else if (typeof item.start === 'number') {
+                                itemStartSeconds = item.start;
+                            } else if (item.start && item.start.seconds !== undefined) {
+                                itemStartSeconds = item.start.seconds;
+                            } else if (item.start && item.start.ticks) {
+                                var timeObj = new Time();
+                                timeObj.ticks = item.start.ticks;
+                                itemStartSeconds = timeObj.seconds;
+                            }
+
+                            if (Math.abs(itemStartSeconds - startTime) < 0.01) {
+                                qeClip = item;
+                                break;
+                            }
+                        }
+
+                        if (qeClip) {
+                            // PROBE: Inspect QE Components
+                            if (i === 0) { // Only first clip
+                                var debugMsg = "QE Component Probe:\n";
+                                try {
+                                    debugMsg += "numComponents: " + qeClip.numComponents + "\n";
+
+                                    if (qeClip.numComponents > 0) {
+                                        for (var c = 0; c < qeClip.numComponents; c++) {
+                                            var qeComp = qeClip.getComponentAt(c);
+                                            if (qeComp) {
+                                                debugMsg += "[" + c + "] " + (qeComp.name || "Unnamed") + "\n";
+                                                if (qeComp.name && qeComp.name.indexOf(effectNamePart) !== -1) {
+                                                    debugMsg += "   FOUND TARGET!\n";
+                                                    if (qeComp.reflect) {
+                                                        var mNames = [];
+                                                        var methods = qeComp.reflect.methods;
+                                                        for (var m = 0; m < methods.length; m++) mNames.push(methods[m].name);
+                                                        debugMsg += "   Methods: " + mNames.join(", ") + "\n";
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    if (qeClip.removeEffects) {
+                                        debugMsg += "removeEffects Arity: " + qeClip.removeEffects.length + "\n";
+                                    } else {
+                                        debugMsg += "removeEffects: undefined\n";
+                                    }
+
+                                } catch (err) {
+                                    debugMsg += "Probe Error: " + err.toString();
+                                }
+                                alert(debugMsg);
+                            }
+                        }
+                    }
+                }
             } else {
-                alert("Undo Error: Original track not found.");
+                // Standard Undo (Track Restore)
+                var trackIndex = historyItem.trackIndex;
+                var state = historyItem.state;
+
+                if (trackIndex >= 0 && trackIndex < sequence.videoTracks.numTracks) {
+                    var videoTrack = sequence.videoTracks[trackIndex];
+                    restoreTrackState(videoTrack, state);
+                } else {
+                    alert("Undo Error: Original track not found.");
+                }
             }
         } else {
             alert("Nothing to undo in extension history.");
         }
     } catch (e) {
-        alert("Undo Error: " + e.toString());
+        alert("Undo Error: " + e.toString() + " on line " + (e.line || "unknown"));
     }
 }
 
@@ -574,5 +657,135 @@ function loopify() {
 
     } catch (e) {
         alert("Loopify Error: " + e.toString());
+    }
+}
+
+function lilShake() {
+    app.enableQE();
+    var project = app.project;
+    var sequence = project.activeSequence;
+    if (!sequence) { alert("Please open a sequence."); return; }
+
+    var videoTrack = null;
+    var trackIndex = -1;
+
+    // Find the video track with selected clips
+    for (var i = 0; i < sequence.videoTracks.numTracks; i++) {
+        var track = sequence.videoTracks[i];
+        for (var j = 0; j < track.clips.numItems; j++) {
+            if (track.clips[j].isSelected()) {
+                videoTrack = track;
+                trackIndex = i;
+                break;
+            }
+        }
+        if (videoTrack) break;
+    }
+
+    if (!videoTrack) {
+        alert("Please select the clips you want to apply Lil Shake to.");
+        return;
+    }
+
+    try {
+        var selectedClips = [];
+        var clipStartTimes = [];
+
+        for (var k = 0; k < videoTrack.clips.numItems; k++) {
+            if (videoTrack.clips[k].isSelected()) {
+                selectedClips.push(videoTrack.clips[k]);
+                clipStartTimes.push(videoTrack.clips[k].start.seconds);
+            }
+        }
+
+        // Push Smart Undo Action
+        historyStack.push({
+            type: "removeEffect",
+            trackIndex: trackIndex,
+            clipStartTimes: clipStartTimes,
+            effectName: "Camera Shake FX"
+        });
+
+        for (var m = 0; m < selectedClips.length; m++) {
+            var clip = selectedClips[m];
+
+            // Apply Effect via QE
+            var qeClip = null;
+            var qeTrack = qe.project.getActiveSequence().getVideoTrackAt(trackIndex);
+
+            if (qeTrack) {
+                for (var q = 0; q < qeTrack.numItems; q++) {
+                    var item = qeTrack.getItemAt(q);
+                    var itemStartSeconds = 0;
+
+                    // Handle different QE time formats
+                    if (typeof item.start === 'string') {
+                        var timeObj = new Time();
+                        timeObj.ticks = item.start;
+                        itemStartSeconds = timeObj.seconds;
+                    } else if (typeof item.start === 'number') {
+                        itemStartSeconds = item.start;
+                    } else if (item.start && item.start.seconds !== undefined) {
+                        itemStartSeconds = item.start.seconds;
+                    } else if (item.start && item.start.ticks) {
+                        var timeObj = new Time();
+                        timeObj.ticks = item.start.ticks;
+                        itemStartSeconds = timeObj.seconds;
+                    }
+
+                    if (Math.abs(itemStartSeconds - clip.start.seconds) < 0.01) {
+                        qeClip = item;
+                        break;
+                    }
+                }
+            }
+
+            if (qeClip) {
+                var shakeEffect = qe.project.getVideoEffectByName("FI: Camera Shake FX");
+                if (!shakeEffect) {
+                    // Try alternative name if needed, or alert
+                    shakeEffect = qe.project.getVideoEffectByName("Camera Shake FX");
+                }
+
+                if (shakeEffect) {
+                    qeClip.addVideoEffect(shakeEffect);
+                } else {
+                    alert("Error: 'FI: Camera Shake FX' effect not found. Please ensure Film Impact plugins are installed.");
+                    // Don't return here, try to process other clips or at least save what we can
+                }
+            }
+
+            // Set Parameters via Standard API
+            var components = clip.components;
+            if (components) {
+                for (var c = 0; c < components.numItems; c++) {
+                    var comp = components[c];
+                    if (comp.displayName.indexOf("Camera Shake FX") !== -1) {
+                        var props = comp.properties;
+                        for (var p = 0; p < props.numItems; p++) {
+                            var prop = props[p];
+                            var name = prop.displayName;
+
+                            // Set values based on XML
+                            if (name === "Scale") prop.setValue(90.0, true);
+                            if (name === "Strafe") prop.setValue(20.0, true);
+                            if (name === "Stride") prop.setValue(15.0, true);
+                            if (name === "Roll") prop.setValue(0.0, true);
+                            if (name === "Motion Blur") prop.setValue(20.0, true);
+                            if (name === "Seed") prop.setValue(0.0, true);
+                            if (name === "Camera Mode") prop.setValue(0, true); // Assuming 0 is the index for the mode
+                            if (name === "Lean (deg)") prop.setValue(0.0, true);
+                            if (name === "Variation") prop.setValue(46.0, true);
+                            if (name === "Stabilize") prop.setValue(100.0, true);
+                            if (name === "Speed") prop.setValue(100.0, true);
+                            if (name === "Master") prop.setValue(100.0, true);
+                        }
+                    }
+                }
+            }
+        }
+
+    } catch (e) {
+        alert("Lil Shake Error: " + e.toString());
     }
 }
