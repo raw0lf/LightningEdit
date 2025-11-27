@@ -1,5 +1,5 @@
 # ⚡ Lightning Edit
-Premiere Pro automatic editng for Amin Media.
+Premiere Pro automatic editing tool for Amin Media.
 
 ---
 
