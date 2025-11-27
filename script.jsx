@@ -101,92 +101,161 @@ function restoreTrackState(track, state) {
         }
     }
 }
-
 function rebuildAndSync() {
     var project = app.project;
     var sequence = project.activeSequence;
     if (!sequence) { alert("Please open a sequence."); return; }
 
-    var audioTrack = sequence.audioTracks[0];
-    var videoTrack = null;
-    var trackIndex = -1;
-
-    // Find the video track with selected clips
-    for (var i = 0; i < sequence.videoTracks.numTracks; i++) {
-        var track = sequence.videoTracks[i];
-        for (var j = 0; j < track.clips.numItems; j++) {
-            if (track.clips[j].isSelected()) {
-                videoTrack = track;
-                trackIndex = i;
-                break;
-            }
-        }
-        if (videoTrack) break;
-    }
-
-    if (!videoTrack) {
-        alert("Please select the images/clips you want to sync.");
-        return;
-    }
-
     try {
-        // Capture State for Undo
-        var currentState = captureTrackState(videoTrack);
-
-        // Push to History Stack
-        historyStack.push({
-            trackIndex: trackIndex,
-            state: currentState
-        });
-
-        // Harvest Clips
+        // Harvest Selected Video Clips (from ALL tracks)
         var videoClips = [];
-        for (var i = 0; i < videoTrack.clips.numItems; i++) {
-            if (videoTrack.clips[i].isSelected()) {
-                videoClips.push(videoTrack.clips[i]);
-            }
-        }
-
-        videoClips = []; // Resetting to be sure
-        for (var i = 0; i < videoTrack.clips.numItems; i++) videoClips.push(videoTrack.clips[i]);
-
-        videoClips.sort(function (a, b) { return a.start.seconds - b.start.seconds; });
-
-        var sourceImages = [];
-        for (var j = 0; j < videoClips.length; j++) { sourceImages.push(videoClips[j].projectItem); }
-
-        var audioClips = [];
-        for (var k = 0; k < audioTrack.clips.numItems; k++) audioClips.push(audioTrack.clips[k]);
-        audioClips.sort(function (a, b) { return a.start.seconds - b.start.seconds; });
-
-        if (sourceImages.length === 0 || audioClips.length === 0) {
-            alert("Error: Ensure Images are on the selected track and Audio is on A1.");
-            return;
-        }
-
-        // Clear Target Track
-        for (var x = 0; x < videoClips.length; x++) videoClips[x].remove(false, false);
-
-        // Replant
-        var loopCount = Math.min(sourceImages.length, audioClips.length);
-        for (var z = 0; z < loopCount; z++) {
-            var sourceItem = sourceImages[z];
-            var audioClip = audioClips[z];
-            var placeTime = new Time();
-            placeTime.seconds = audioClip.start.seconds;
-
-            videoTrack.overwriteClip(sourceItem, placeTime);
-
-            // Find and Stretch (Tolerance 0.1s)
-            for (var m = 0; m < videoTrack.clips.numItems; m++) {
-                if (Math.abs(videoTrack.clips[m].start.seconds - placeTime.seconds) < 0.1) {
-                    var newEnd = new Time();
-                    newEnd.seconds = audioClip.end.seconds;
-                    videoTrack.clips[m].end = newEnd;
-                    break;
+        for (var i = 0; i < sequence.videoTracks.numTracks; i++) {
+            var track = sequence.videoTracks[i];
+            for (var j = 0; j < track.clips.numItems; j++) {
+                if (track.clips[j].isSelected()) {
+                    videoClips.push(track.clips[j]);
                 }
             }
         }
+        // Sort by time
+        videoClips.sort(function (a, b) { return a.start.seconds - b.start.seconds; });
+
+        // Harvest Selected Audio Clips (from ALL tracks)
+        var audioClips = [];
+        for (var i = 0; i < sequence.audioTracks.numTracks; i++) {
+            var aTrack = sequence.audioTracks[i];
+            for (var j = 0; j < aTrack.clips.numItems; j++) {
+                if (aTrack.clips[j].isSelected()) {
+                    audioClips.push(aTrack.clips[j]);
+                }
+            }
+        }
+        // Sort by time
+        audioClips.sort(function (a, b) { return a.start.seconds - b.start.seconds; });
+
+        if (videoClips.length === 0) {
+            alert("Error: No video clips selected.");
+            return;
+        }
+        if (audioClips.length === 0) {
+            alert("Error: No audio clips selected. Please select the audio clips you want to sync to.");
+            return;
+        }
+
+        // Capture State for Undo (Smart Move)
+        var movedClipsState = [];
+        var deletedClipsState = [];
+
+        var loopCount = Math.min(videoClips.length, audioClips.length);
+
+        // 1. Capture state of clips to be moved
+        for (var z = 0; z < loopCount; z++) {
+            var vc = videoClips[z];
+            movedClipsState.push({
+                clip: vc, // Store reference
+                start: vc.start.seconds,
+                end: vc.end.seconds,
+                inPoint: vc.inPoint.seconds,
+                outPoint: vc.outPoint.seconds
+            });
+        }
+
+        // 2. Capture state of extras (to be deleted)
+        for (var z = loopCount; z < videoClips.length; z++) {
+            var vc = videoClips[z];
+            // Find track index for this clip
+            var cTrackIndex = -1;
+            for (var t = 0; t < sequence.videoTracks.numTracks; t++) {
+                var tr = sequence.videoTracks[t];
+                for (var cl = 0; cl < tr.clips.numItems; cl++) {
+                    if (tr.clips[cl] === vc) {
+                        cTrackIndex = t;
+                        break;
+                    }
+                }
+                if (cTrackIndex !== -1) break;
+            }
+
+            deletedClipsState.push({
+                trackIndex: cTrackIndex,
+                projectItem: vc.projectItem,
+                start: vc.start.seconds,
+                end: vc.end.seconds,
+                inPoint: vc.inPoint.seconds,
+                outPoint: vc.outPoint.seconds,
+                opacityProps: getClipOpacityProperties(vc)
+            });
+        }
+
+        historyStack.push({
+            type: "syncMove",
+            trackIndex: -1,
+            movedClips: movedClipsState,
+            deletedClips: deletedClipsState
+        });
+
+        // 3. Move synced clips to Safe Zone (Project End + 5 mins) to avoid collisions
+        // Find Project End
+        var projectEnd = 0;
+        for (var i = 0; i < sequence.videoTracks.numTracks; i++) {
+            var track = sequence.videoTracks[i];
+            for (var j = 0; j < track.clips.numItems; j++) {
+                if (track.clips[j].end.seconds > projectEnd) projectEnd = track.clips[j].end.seconds;
+            }
+        }
+        for (var i = 0; i < sequence.audioTracks.numTracks; i++) {
+            var track = sequence.audioTracks[i];
+            for (var j = 0; j < track.clips.numItems; j++) {
+                if (track.clips[j].end.seconds > projectEnd) projectEnd = track.clips[j].end.seconds;
+            }
+        }
+        var safeZoneStart = projectEnd + 300; // Reduced to 5 minutes
+
+        for (var z = 0; z < loopCount; z++) {
+            var vc = videoClips[z];
+            var ac = audioClips[z]; // We need audio info here to trim
+
+            // 1. Move to Safe Zone
+            var tempTime = new Time();
+            tempTime.seconds = safeZoneStart + (z * 600); // Stagger by 10 minutes
+            vc.start = tempTime;
+
+            // 2. Trim (Set Duration) IN SAFE ZONE
+            var duration = ac.end.seconds - ac.start.seconds;
+
+            // Method A: Set OutPoint (relative to InPoint)
+            var newOut = new Time();
+            newOut.seconds = vc.inPoint.seconds + duration;
+            vc.outPoint = newOut;
+
+            // Method B: Force End Time (relative to Start)
+            var newEnd = new Time();
+            newEnd.seconds = tempTime.seconds + duration;
+            vc.end = newEnd;
+        }
+
+        // 4. Move clips to final Audio destinations
+        for (var z = 0; z < loopCount; z++) {
+            var vc = videoClips[z];
+            var ac = audioClips[z];
+
+            // Move to Start Time
+            var newStart = new Time();
+            newStart.seconds = ac.start.seconds;
+            vc.start = newStart;
+
+            // Re-assert End Time (just to be absolutely sure)
+            var duration = ac.end.seconds - ac.start.seconds;
+            var newEnd = new Time();
+            newEnd.seconds = newStart.seconds + duration;
+            vc.end = newEnd;
+        }
+
+        // 5. Delete extras
+        for (var z = loopCount; z < videoClips.length; z++) {
+            videoClips[z].remove(false, false);
+        }
+
     } catch (e) {
         alert("Error: " + e.toString());
     }
@@ -418,7 +487,7 @@ function universalUndo() {
             var historyItem = historyStack.pop();
 
             if (historyItem.type === "removeEffect") {
-                // Smart Undo: Remove specific effect via QE Component Probe
+                // Smart Undo: Remove specific effect via QE Component
                 var trackIndex = historyItem.trackIndex;
                 var clipStartTimes = historyItem.clipStartTimes;
                 var effectNamePart = historyItem.effectName;
@@ -429,6 +498,9 @@ function universalUndo() {
                 var qeTrack = activeSeq.getVideoTrackAt(trackIndex);
 
                 if (qeTrack) {
+                    var successCount = 0;
+                    var failCount = 0;
+
                     for (var i = 0; i < clipStartTimes.length; i++) {
                         var startTime = clipStartTimes[i];
 
@@ -458,44 +530,119 @@ function universalUndo() {
                         }
 
                         if (qeClip) {
-                            // PROBE: Inspect QE Components
-                            if (i === 0) { // Only first clip
-                                var debugMsg = "QE Component Probe:\n";
-                                try {
-                                    debugMsg += "numComponents: " + qeClip.numComponents + "\n";
-
-                                    if (qeClip.numComponents > 0) {
-                                        for (var c = 0; c < qeClip.numComponents; c++) {
-                                            var qeComp = qeClip.getComponentAt(c);
-                                            if (qeComp) {
-                                                debugMsg += "[" + c + "] " + (qeComp.name || "Unnamed") + "\n";
-                                                if (qeComp.name && qeComp.name.indexOf(effectNamePart) !== -1) {
-                                                    debugMsg += "   FOUND TARGET!\n";
-                                                    if (qeComp.reflect) {
-                                                        var mNames = [];
-                                                        var methods = qeComp.reflect.methods;
-                                                        for (var m = 0; m < methods.length; m++) mNames.push(methods[m].name);
-                                                        debugMsg += "   Methods: " + mNames.join(", ") + "\n";
-                                                    }
-                                                }
-                                            }
+                            var removed = false;
+                            // Iterate Components to find and remove
+                            for (var c = 0; c < qeClip.numComponents; c++) {
+                                var qeComp = qeClip.getComponentAt(c);
+                                if (qeComp && qeComp.name.indexOf(effectNamePart) !== -1) {
+                                    try {
+                                        if (qeComp.remove) {
+                                            qeComp.remove();
+                                            removed = true;
+                                            successCount++;
                                         }
+                                    } catch (err) {
+                                        alert("Error removing component: " + err.toString());
                                     }
-
-                                    if (qeClip.removeEffects) {
-                                        debugMsg += "removeEffects Arity: " + qeClip.removeEffects.length + "\n";
-                                    } else {
-                                        debugMsg += "removeEffects: undefined\n";
-                                    }
-
-                                } catch (err) {
-                                    debugMsg += "Probe Error: " + err.toString();
+                                    break;
                                 }
-                                alert(debugMsg);
+                            }
+                            if (!removed) failCount++;
+                        } else {
+                            failCount++;
+                        }
+                    }
+
+                    if (successCount > 0) {
+                        // alert("Undo Successful: Removed effect from " + successCount + " clips.");
+                    } else if (failCount > 0) {
+                        alert("Undo Failed: Could not remove effect from " + failCount + " clips.");
+                    }
+                }
+            } else if (historyItem.type === "syncMove") {
+                // Smart Undo: Restore Moved Clips and Deleted Extras
+                var trackIndex = historyItem.trackIndex;
+                var movedClips = historyItem.movedClips;
+                var deletedClips = historyItem.deletedClips;
+
+                // 1. Move clips back to Safe Zone first to avoid collisions (if they exist)
+                var projectEnd = 0;
+                for (var i = 0; i < sequence.videoTracks.numTracks; i++) {
+                    var t = sequence.videoTracks[i];
+                    for (var j = 0; j < t.clips.numItems; j++) {
+                        if (t.clips[j].end.seconds > projectEnd) projectEnd = t.clips[j].end.seconds;
+                    }
+                }
+                var safeZoneStart = projectEnd + 3600;
+
+                for (var i = 0; i < movedClips.length; i++) {
+                    var item = movedClips[i];
+                    if (item.clip) {
+                        var tempTime = new Time();
+                        tempTime.seconds = safeZoneStart + (i * 10);
+                        item.clip.start = tempTime;
+                    }
+                }
+
+                // 2. Move clips back to Original Positions
+                for (var i = 0; i < movedClips.length; i++) {
+                    var item = movedClips[i];
+                    if (item.clip) {
+                        var newStart = new Time();
+                        newStart.seconds = item.start;
+                        item.clip.start = newStart;
+
+                        var newEnd = new Time();
+                        newEnd.seconds = item.end;
+                        item.clip.end = newEnd;
+
+                        var newIn = new Time();
+                        newIn.seconds = item.inPoint;
+                        item.clip.inPoint = newIn;
+
+                        var newOut = new Time();
+                        newOut.seconds = item.outPoint;
+                        item.clip.outPoint = newOut;
+                    }
+                }
+
+                // 3. Restore Deleted Extras
+                for (var i = 0; i < deletedClips.length; i++) {
+                    var item = deletedClips[i];
+                    var targetTrackIndex = item.trackIndex;
+
+                    if (targetTrackIndex !== -1 && targetTrackIndex < sequence.videoTracks.numTracks) {
+                        var track = sequence.videoTracks[targetTrackIndex];
+                        var time = new Time();
+                        time.seconds = item.start;
+
+                        track.overwriteClip(item.projectItem, time);
+
+                        // Adjust Duration/In/Out
+                        for (var m = 0; m < track.clips.numItems; m++) {
+                            var clip = track.clips[m];
+                            if (Math.abs(clip.start.seconds - item.start) < 0.01) {
+                                var newEnd = new Time();
+                                newEnd.seconds = item.end;
+                                clip.end = newEnd;
+
+                                var newIn = new Time();
+                                newIn.seconds = item.inPoint;
+                                clip.inPoint = newIn;
+
+                                var newOut = new Time();
+                                newOut.seconds = item.outPoint;
+                                clip.outPoint = newOut;
+
+                                if (item.opacityProps) {
+                                    setClipOpacityProperties(clip, item.opacityProps);
+                                }
+                                break;
                             }
                         }
                     }
                 }
+
             } else {
                 // Standard Undo (Track Restore)
                 var trackIndex = historyItem.trackIndex;
@@ -749,38 +896,35 @@ function lilShake() {
 
                 if (shakeEffect) {
                     qeClip.addVideoEffect(shakeEffect);
-                } else {
-                    alert("Error: 'FI: Camera Shake FX' effect not found. Please ensure Film Impact plugins are installed.");
-                    // Don't return here, try to process other clips or at least save what we can
-                }
-            }
 
-            // Set Parameters via Standard API
-            var components = clip.components;
-            if (components) {
-                for (var c = 0; c < components.numItems; c++) {
-                    var comp = components[c];
-                    if (comp.displayName.indexOf("Camera Shake FX") !== -1) {
-                        var props = comp.properties;
-                        for (var p = 0; p < props.numItems; p++) {
-                            var prop = props[p];
-                            var name = prop.displayName;
+                    // Set Parameters via Standard API
+                    var components = clip.components;
+                    if (components) {
+                        for (var c = 0; c < components.numItems; c++) {
+                            var comp = components[c];
+                            if (comp.displayName.indexOf("Camera Shake FX") !== -1) {
+                                var props = comp.properties;
+                                for (var p = 0; p < props.numItems; p++) {
+                                    var prop = props[p];
+                                    var name = prop.displayName;
 
-                            // Set values based on XML
-                            if (name === "Scale") prop.setValue(90.0, true);
-                            if (name === "Strafe") prop.setValue(20.0, true);
-                            if (name === "Stride") prop.setValue(15.0, true);
-                            if (name === "Roll") prop.setValue(0.0, true);
-                            if (name === "Motion Blur") prop.setValue(20.0, true);
-                            if (name === "Seed") prop.setValue(0.0, true);
-                            if (name === "Camera Mode") prop.setValue(0, true); // Assuming 0 is the index for the mode
-                            if (name === "Lean (deg)") prop.setValue(0.0, true);
-                            if (name === "Variation") prop.setValue(46.0, true);
-                            if (name === "Stabilize") prop.setValue(100.0, true);
-                            if (name === "Speed") prop.setValue(100.0, true);
-                            if (name === "Master") prop.setValue(100.0, true);
+                                    if (name === "Scale") prop.setValue(90.0, true);
+                                    if (name === "Strafe") prop.setValue(20.0, true);
+                                    if (name === "Stride") prop.setValue(15.0, true);
+                                    if (name === "Roll") prop.setValue(0.0, true);
+                                    if (name === "Lean (deg)") prop.setValue(0.0, true);
+                                    if (name === "Variation") prop.setValue(46.0, true);
+                                    if (name === "Stabilize") prop.setValue(100.0, true);
+                                    if (name === "Speed") prop.setValue(100.0, true);
+                                    if (name === "Master") prop.setValue(100.0, true);
+                                    if (name === "Motion Blur") prop.setValue(20.0, true);
+                                    if (name === "Camera Mode") prop.setValue(0, true); // 0 = Still
+                                }
+                            }
                         }
                     }
+                } else {
+                    alert("Error: 'FI: Camera Shake FX' effect not found. Please ensure Film Impact plugins are installed.");
                 }
             }
         }
@@ -789,3 +933,4 @@ function lilShake() {
         alert("Lil Shake Error: " + e.toString());
     }
 }
+
