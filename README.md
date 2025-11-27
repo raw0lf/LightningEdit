@@ -1,4 +1,4 @@
-# ⚡ Lightning Edit
+# ⚡ Lightning Edit v2.0.0
 Premiere Pro automatic editing tool for Amin Media.
 
 ---
