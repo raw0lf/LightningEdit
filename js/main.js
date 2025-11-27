@@ -15,6 +15,10 @@
         document.getElementById("blurifyButton").addEventListener("click", function () {
             csInterface.evalScript("blurify()");
         });
+
+        document.getElementById("loopifyButton").addEventListener("click", function () {
+            csInterface.evalScript("loopify()");
+        });
     }
 
     init();

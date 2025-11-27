@@ -1,5 +1,52 @@
 var historyStack = [];
 
+function getClipOpacityProperties(clip) {
+    var props = { opacity: 100, blendMode: 0 };
+    var components = clip.components;
+    if (components) {
+        for (var i = 0; i < components.numItems; i++) {
+            if (components[i].displayName === "Opacity") {
+                var properties = components[i].properties;
+                for (var j = 0; j < properties.numItems; j++) {
+                    if (properties[j].displayName === "Opacity") {
+                        props.opacity = properties[j].getValue();
+                    }
+                    if (properties[j].displayName === "Blend Mode") {
+                        props.blendMode = properties[j].getValue();
+                    }
+                }
+                break;
+            }
+        }
+    }
+    return props;
+}
+
+function setClipOpacityProperties(clip, props) {
+    var components = clip.components;
+    if (components) {
+        for (var i = 0; i < components.numItems; i++) {
+            if (components[i].displayName === "Opacity") {
+                var properties = components[i].properties;
+                for (var j = 0; j < properties.numItems; j++) {
+                    if (properties[j].displayName === "Opacity") {
+                        properties[j].setValue(props.opacity, true);
+                    }
+                    if (properties[j].displayName === "Blend Mode") {
+                        // Map the read index to the write index
+                        var readIndex = props.blendMode;
+                        var name = getBlendModeName(readIndex);
+                        var writeIndex = getBlendModeWriteIndex(name);
+
+                        properties[j].setValue(writeIndex, true);
+                    }
+                }
+                break;
+            }
+        }
+    }
+}
+
 function captureTrackState(track) {
     var state = [];
     for (var i = 0; i < track.clips.numItems; i++) {
@@ -9,7 +56,8 @@ function captureTrackState(track) {
             start: clip.start.seconds,
             end: clip.end.seconds,
             inPoint: clip.inPoint.seconds,
-            outPoint: clip.outPoint.seconds
+            outPoint: clip.outPoint.seconds,
+            opacityProps: getClipOpacityProperties(clip)
         });
     }
     return state;
@@ -30,7 +78,6 @@ function restoreTrackState(track, state) {
         track.overwriteClip(item.projectItem, time);
 
         // Adjust Duration/In/Out
-        // Finding the just-added clip can be tricky, assuming it's the one at 'time'
         for (var m = 0; m < track.clips.numItems; m++) {
             var clip = track.clips[m];
             if (Math.abs(clip.start.seconds - item.start) < 0.01) {
@@ -45,6 +92,10 @@ function restoreTrackState(track, state) {
                 var newOut = new Time();
                 newOut.seconds = item.outPoint;
                 clip.outPoint = newOut;
+
+                if (item.opacityProps) {
+                    setClipOpacityProperties(clip, item.opacityProps);
+                }
                 break;
             }
         }
@@ -379,5 +430,149 @@ function universalUndo() {
         }
     } catch (e) {
         alert("Undo Error: " + e.toString());
+    }
+}
+
+// Blend Mode Mapping
+var BLEND_MODES_READ = [
+    "Normal", "Dissolve", "-",
+    "Darken", "Multiply", "Color Burn", "Linear Burn", "Darker Color", "-",
+    "Lighten", "Screen", "Color Dodge", "Linear Dodge (Add)", "Lighter Color", "-",
+    "Overlay", "Soft Light", "Hard Light", "Vivid Light", "Linear Light", "Pin Light", "Hard Mix", "-",
+    "Difference", "Exclusion", "Subtract", "Divide", "-",
+    "Hue", "Saturation", "Color", "Luminosity"
+];
+
+var BLEND_MODES_WRITE = [
+    "Color", "Color Burn", "Color Dodge", "Darken", "Darker Color", "Difference", "Divide", "Exclusion",
+    "Hard Light", "Hard Mix", "Hue", "Lighten", "Lighter Color", "Linear Burn", "Linear Dodge (Add)", "Linear Light",
+    "Luminosity", "Multiply", "Normal", "Overlay", "Pin Light", "Saturation", "Screen", "Soft Light", "Subtract", "Vivid Light"
+];
+
+function getBlendModeName(index) {
+    if (index >= 0 && index < BLEND_MODES_READ.length) {
+        return BLEND_MODES_READ[index];
+    }
+    return "Normal";
+}
+
+function getBlendModeWriteIndex(name) {
+    for (var i = 0; i < BLEND_MODES_WRITE.length; i++) {
+        if (BLEND_MODES_WRITE[i] === name) {
+            return i;
+        }
+    }
+    return 0; // Default to Normal
+}
+
+function loopify() {
+    var project = app.project;
+    var sequence = project.activeSequence;
+    if (!sequence) { alert("Please open a sequence."); return; }
+
+    var videoTrack = null;
+    var trackIndex = -1;
+    var selectedClip = null;
+
+    // Find the video track with selected clips
+    for (var i = 0; i < sequence.videoTracks.numTracks; i++) {
+        var track = sequence.videoTracks[i];
+        for (var j = 0; j < track.clips.numItems; j++) {
+            if (track.clips[j].isSelected()) {
+                videoTrack = track;
+                trackIndex = i;
+                selectedClip = track.clips[j];
+                break;
+            }
+        }
+        if (videoTrack) break;
+    }
+
+    if (!selectedClip) {
+        alert("Please select a clip to Loopify.");
+        return;
+    }
+
+    try {
+        // Capture State for Undo
+        var currentState = captureTrackState(videoTrack);
+        historyStack.push({
+            trackIndex: trackIndex,
+            state: currentState
+        });
+
+        // Find Project End (Max End Time of all clips in sequence)
+        var projectEnd = 0;
+        for (var i = 0; i < sequence.videoTracks.numTracks; i++) {
+            var track = sequence.videoTracks[i];
+            for (var j = 0; j < track.clips.numItems; j++) {
+                var end = track.clips[j].end.seconds;
+                if (end > projectEnd) projectEnd = end;
+            }
+        }
+        for (var i = 0; i < sequence.audioTracks.numTracks; i++) {
+            var track = sequence.audioTracks[i];
+            for (var j = 0; j < track.clips.numItems; j++) {
+                var end = track.clips[j].end.seconds;
+                if (end > projectEnd) projectEnd = end;
+            }
+        }
+
+        // Loop Logic
+        var clipDuration = selectedClip.end.seconds - selectedClip.start.seconds;
+        var currentPos = selectedClip.end.seconds;
+        var projectItem = selectedClip.projectItem;
+
+        // Capture original In/Out to replicate
+        var originalIn = selectedClip.inPoint.seconds;
+        var originalOut = selectedClip.outPoint.seconds;
+
+        while (currentPos < projectEnd) {
+            var placeTime = new Time();
+            placeTime.seconds = currentPos;
+
+            videoTrack.overwriteClip(projectItem, placeTime);
+
+            // Find the new clip to adjust In/Out if needed
+            var newClip = null;
+            for (var k = 0; k < videoTrack.clips.numItems; k++) {
+                if (Math.abs(videoTrack.clips[k].start.seconds - currentPos) < 0.01) {
+                    newClip = videoTrack.clips[k];
+                    break;
+                }
+            }
+
+            if (newClip) {
+                // Match original clip's In/Out
+                var newIn = new Time(); newIn.seconds = originalIn;
+                newClip.inPoint = newIn;
+
+                var newOut = new Time(); newOut.seconds = originalOut;
+                newClip.outPoint = newOut;
+
+                // Apply Opacity/Blend Mode from Source
+                var sourceOpacityProps = getClipOpacityProperties(selectedClip);
+                setClipOpacityProperties(newClip, sourceOpacityProps);
+
+                // Check if we went past projectEnd
+                if (newClip.end.seconds > projectEnd) {
+                    var trimEnd = new Time();
+                    trimEnd.seconds = projectEnd;
+                    newClip.end = trimEnd;
+                }
+
+                // Update currentPos for next iteration
+                currentPos = newClip.end.seconds;
+            } else {
+                // Safety break if clip wasn't placed
+                currentPos += clipDuration;
+            }
+
+            // Safety break for infinite loops
+            if (clipDuration <= 0) break;
+        }
+
+    } catch (e) {
+        alert("Loopify Error: " + e.toString());
     }
 }
