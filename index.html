@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <meta charset="utf-8">
+    <title>Lightning Edit</title>
+    <style>
+        body {
+            background-color: #232323;
+            color: #ffffff;
+            font-family: sans-serif;
+            margin: 0;
+            padding: 8px;
+            display: flex;
+            flex-direction: row;
+            align-items: center;
+            box-sizing: border-box;
+        }
+
+        .logo {
+            width: 20px;
+            height: auto;
+            margin-right: 8px;
+            margin-bottom: 0;
+            flex-shrink: 0;
+        }
+
+        button {
+            background-color: #0078d4;
+            color: white;
+            border: none;
+            padding: 6px 12px;
+            font-size: 12px;
+            cursor: pointer;
+            border-radius: 4px;
+            transition: background-color 0.2s;
+            flex: 1;
+            white-space: nowrap;
+        }
+
+        button:hover {
+            background-color: #005a9e;
+        }
+
+        button:active {
+            background-color: #004578;
+        }
+
+        #undoButton {
+            background-color: #333333;
+            border: 1px solid #555555;
+            max-width: 60px;
+        }
+
+        #undoButton:hover {
+            background-color: #444444;
+        }
+
+        #undoButton:active {
+            background-color: #222222;
+        }
+
+        .button-container {
+            display: flex;
+            flex-direction: row;
+            justify-content: space-between;
+            gap: 6px;
+            flex: 1;
+            width: auto;
+        }
+    </style>
+</head>
+
+<body>
+    <img src="img/logo.png" alt="Lightning Edit Logo" class="logo">
+    <div class="button-container">
+        <button id="syncButton">⚡ Sync</button>
+        <button id="blurifyButton">💧 Blurify</button>
+        <button id="undoButton">↩ Undo</button>
+    </div>
+
+    <script src="js/CSInterface.js"></script>
+    <script src="js/main.js"></script>
+</body>
+
+</html>
