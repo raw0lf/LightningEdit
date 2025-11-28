@@ -5,7 +5,7 @@ Premiere Pro automatic editing tool for Amin Media.
 
 ## 📥 How to Install for WINDOWS
 
-1. **[Click here to Download Windows Installer](https://github.com/raw0lf/LightningEdit/releases/download/v1.0.0/Install_Lightning_Edit_v1.exe)**
+1. **[Click here to Download Windows Installer](https://github.com/raw0lf/LightningEdit/releases/download/v2.0.0/Install_Lightning_Edit_v2.exe)**
 2. Open the file.
 3. If Windows warns you, click **More Info** > **Run Anyway**.
 
@@ -16,7 +16,7 @@ Premiere Pro automatic editing tool for Amin Media.
 Since we don't have an automated installer for Mac yet, follow these 3 steps:
 
 ### 1. Download
-**[Click here to Download Mac Files](https://github.com/raw0lf/LightningEdit/releases/download/v1.0.0/LightningEditV1.zip)**
+**[Click here to Download Mac Files](https://github.com/raw0lf/LightningEdit/releases/download/v2.0.0/LightningEDIT_V2.zip)**
 
 ### 2. Install
 1. Unzip the file. You will see a folder named `com.amin.lightningedit`.
